@@ -21,6 +21,11 @@ const (
 	// Default message size in bytes. This is probably *much* too big atm?
 	messageSize = 1024
 
+	// How much extra information we want to store in the onion
+	// routing header. The paper used this to store an HMAC of the
+	// payload, but we'll put it somewhere else.
+	extraInfo = securityParameter
+
 	// Mix header over head. If we assume 5 hops (which seems sufficient for
 	// LN, for now atleast), 32 byte group element to be re-randomized each
 	// hop, and 32 byte symmetric key.
@@ -45,13 +50,13 @@ const (
 	// implementing our stream cipher to encrypt/decrypt the mix header. The
 	// last 2 * securityParameter bytes are only used in order to generate/check
 	// the MAC over the header.
-	numStreamBytes = (2*numMaxHops + 3) * securityParameter
+	numStreamBytes = (2*numMaxHops+2)*securityParameter + extraInfo
 
 	sharedSecretSize = 32
 
 	// node_id + mac + (2*5-1)*20
 	// 20 + 20 + 180 = 220
-	routingInfoSize = (securityParameter * 2) + (2*numMaxHops-1)*securityParameter
+	routingInfoSize = 2*numMaxHops*securityParameter + extraInfo
 )
 
 var defaultBitcoinNet = &chaincfg.TestNet3Params
@@ -126,17 +131,13 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 	filler := generateHeaderPadding(numHops, hopSharedSecrets)
 
 	// First we generate the routing info + MAC for the very last hop.
-	mixHeader := make([]byte, 0, routingInfoSize)
-	mixHeader = append(mixHeader, dest...)
-	mixHeader = append(mixHeader, identifier[:]...)
-	mixHeader = append(mixHeader,
-		bytes.Repeat([]byte{0}, ((2*(numMaxHops-numHops)+2)*securityParameter-len(dest)))...)
+	mixHeader := bytes.Repeat([]byte{0x00}, (2*(numMaxHops-numHops)+2)*securityParameter+extraInfo)
 
 	// Encrypt the header for the final hop with the shared secret the
 	// destination will eventually derive, then pad the message out to full
 	// size with the "random" filler bytes.
 	streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[numHops-1]), numStreamBytes)
-	xor(mixHeader, mixHeader, streamBytes[:(2*(numMaxHops-numHops)+3)*securityParameter])
+	xor(mixHeader, mixHeader, streamBytes[:routingInfoSize])
 	mixHeader = append(mixHeader, filler...)
 
 	// Calculate a MAC over the encrypted mix header for the last hop
@@ -157,10 +158,10 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 		// MAC for mix header.
 		b.Write(headerMac[:])
 		// Mix header itself.
-		b.Write(mixHeader[:(2*numMaxHops-1)*securityParameter])
+		b.Write(mixHeader[:(2*numMaxHops-2)*securityParameter+extraInfo])
 
 		streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[i]), numStreamBytes)
-		xor(mixHeader, b.Bytes(), streamBytes[:(2*numMaxHops+1)*securityParameter])
+		xor(mixHeader, b.Bytes(), streamBytes[:routingInfoSize])
 		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), mixHeader)
 	}
 
@@ -189,7 +190,7 @@ func generateHeaderPadding(numHops int, sharedSecrets [][sharedSecretSize]byte) 
 	filler := make([]byte, 2*(numHops-1)*securityParameter)
 
 	for i := 1; i < numHops; i++ {
-		totalFillerSize := (2*(numMaxHops-i) + 3) * securityParameter
+		totalFillerSize := (2*(numMaxHops-i)+2)*securityParameter + extraInfo
 		padding := bytes.Repeat([]byte{0}, 2*securityParameter)
 
 		var tempBuf bytes.Buffer
