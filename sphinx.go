@@ -85,7 +85,7 @@ type MixHeader struct {
 // 'dest'. This function returns the created mix header along with a derived
 // shared secret for each node in the path.
 func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
-	paymentPath []*btcec.PublicKey) (*MixHeader, [][sharedSecretSize]byte, error) {
+	paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey) (*MixHeader, [][sharedSecretSize]byte, error) {
 	// Each hop performs ECDH with our ephemeral key pair to arrive at a
 	// shared secret. Additionally, each hop randomizes the group element
 	// for the next hop by multiplying it by the blinding factor. This way
@@ -95,12 +95,6 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 	hopEphemeralPubKeys := make([]*btcec.PublicKey, numHops)
 	hopSharedSecrets := make([][sha256.Size]byte, numHops)
 	hopBlindingFactors := make([][sha256.Size]byte, numHops)
-
-	// Generate a new ephemeral key to use for ECDH for this session.
-	sessionKey, err := btcec.NewPrivateKey(btcec.S256())
-	if err != nil {
-		return nil, nil, err
-	}
 
 	// Compute the triplet for the first hop outside of the main loop.
 	// Within the loop each new triplet will be computed recursively based
@@ -225,7 +219,7 @@ type ForwardingMessage struct {
 // mixnet, eventually reaching the final node specified by 'identifier'. The
 // onion encrypted message payload is then to be delivered to the specified 'dest'
 // address.
-func NewForwardingMessage(route []*btcec.PublicKey, dest LightningAddress,
+func NewForwardingMessage(route []*btcec.PublicKey, dest LightningAddress, sessionKey *btcec.PrivateKey,
 	message []byte) (*ForwardingMessage, error) {
 	routeLength := len(route)
 
@@ -233,7 +227,7 @@ func NewForwardingMessage(route []*btcec.PublicKey, dest LightningAddress,
 	// the null destination and zero identifier in order for the final node
 	// in the route to be able to distinguish the payload as addressed to
 	// itself.
-	mixHeader, secrets, err := NewMixHeader([]byte{nullDest}, zeroNode, route)
+	mixHeader, secrets, err := NewMixHeader([]byte{nullDest}, zeroNode, route, sessionKey)
 	if err != nil {
 		return nil, err
 	}
