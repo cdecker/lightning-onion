@@ -352,9 +352,6 @@ type ProcessMsgAction struct {
 
 	NextHop [securityParameter]byte
 	FwdMsg  *ForwardingMessage
-
-	DestAddr LightningAddress
-	DestMsg  []byte
 }
 
 // SphinxNode...
@@ -430,58 +427,43 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	headerWithPadding := append(routeInfo[:], bytes.Repeat([]byte{0}, 2*securityParameter)...)
 	xor(hopInfo[:], headerWithPadding, streamBytes)
 
-	// Are we the final hop? Or should the message be forwarded further?
-	switch hopInfo[0] {
-	case nullDest: // We're the exit node for a forwarding message.
-		onionCore := lionessDecode(generateKey("pi", sharedSecret), onionMsg)
-		// TODO(roasbeef): check ver and reject if not our net.
-		/*destAddr, _, _ := base58.CheckDecode(string(onionCore[securityParameter : securityParameter*2]))
-		if err != nil {
-			return nil, err
-		}*/
-		destAddr := onionCore[securityParameter : securityParameter*2]
-		msg := onionCore[:]
-		return &ProcessMsgAction{
-			Action:   ExitNode,
-			DestAddr: destAddr,
-			DestMsg:  msg,
-		}, nil
+	// Randomize the DH group element for the next hop using the
+	// deterministic blinding factor.
+	blindingFactor := computeBlindingFactor(dhKey, sharedSecret[:])
+	nextDHKey := blindGroupElement(dhKey, blindingFactor[:])
 
-	default: // The message is destined for another mix-net node.
-		// TODO(roasbeef): prob extract to func
+	// Parse out the ID of the next node in the route.
+	var nextHop [securityParameter]byte
+	copy(nextHop[:], hopInfo[:securityParameter])
 
-		// Randomize the DH group element for the next hop using the
-		// deterministic blinding factor.
-		blindingFactor := computeBlindingFactor(dhKey, sharedSecret[:])
-		nextDHKey := blindGroupElement(dhKey, blindingFactor[:])
+	// MAC and MixHeader for the next hop.
+	var nextMac [securityParameter]byte
+	copy(nextMac[:], hopInfo[securityParameter:securityParameter*2])
+	var nextMixHeader [routingInfoSize]byte
+	copy(nextMixHeader[:], hopInfo[securityParameter*2:])
 
-		// Parse out the ID of the next node in the route.
-		var nextHop [securityParameter]byte
-		copy(nextHop[:], hopInfo[:securityParameter])
+	// Strip a single layer of encryption from the onion for the
+	// next hop to also process.
+	nextOnion := lionessDecode(generateKey("pi", sharedSecret), onionMsg)
 
-		// MAC and MixHeader for the next hop.
-		var nextMac [securityParameter]byte
-		copy(nextMac[:], hopInfo[securityParameter:securityParameter*2])
-		var nextMixHeader [routingInfoSize]byte
-		copy(nextMixHeader[:], hopInfo[securityParameter*2:])
-
-		// Strip a single layer of encryption from the onion for the
-		// next hop to also process.
-		nextOnion := lionessDecode(generateKey("pi", sharedSecret), onionMsg)
-
-		nextFwdMsg := &ForwardingMessage{
-			Header: &MixHeader{
-				EphemeralKey: nextDHKey,
-				RoutingInfo:  nextMixHeader,
-				HeaderMAC:    nextMac,
-			},
-			Msg: nextOnion,
-		}
-
-		return &ProcessMsgAction{
-			Action:  MoreHops,
-			NextHop: nextHop,
-			FwdMsg:  nextFwdMsg,
-		}, nil
+	nextFwdMsg := &ForwardingMessage{
+		Header: &MixHeader{
+			EphemeralKey: nextDHKey,
+			RoutingInfo:  nextMixHeader,
+			HeaderMAC:    nextMac,
+		},
+		Msg: nextOnion,
 	}
+
+	var action ProcessCode = MoreHops
+
+	if bytes.Compare(bytes.Repeat([]byte{0x00}, 20), nextMac[:]) == 0 {
+		action = ExitNode
+	}
+
+	return &ProcessMsgAction{
+		Action:  action,
+		NextHop: nextHop,
+		FwdMsg:  nextFwdMsg,
+	}, nil
 }

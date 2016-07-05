@@ -68,11 +68,7 @@ func main() {
 			log.Fatalf("Failed to decode message: %s", err)
 		}
 		msg := p.FwdMsg
-		if p.Action == sphinx.MoreHops {
-			fmt.Printf("%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
-				msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Msg)
-		} else {
-			fmt.Printf("%s\n", string(p.DestMsg))
-		}
+		fmt.Printf("%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
+			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Msg)
 	}
 }

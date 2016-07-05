@@ -54,14 +54,14 @@ func TestSphinxCorrectness(t *testing.T) {
 		// recognize that it's the exit node.
 		if i == len(nodes)-1 {
 			if processAction.Action != ExitNode {
-				t.Fatalf("Processing error, node %v is the last hop in"+
+				t.Fatalf("Processing error, node %v is the last hop in "+
 					"the path, yet it doesn't recognize so", i)
 			}
 
-			if !bytes.HasPrefix(processAction.DestMsg, []byte("testing")) {
+			if !bytes.HasPrefix(processAction.FwdMsg.Msg[:], []byte("testing")) {
 				t.Fatalf("Final message parsed incorrectly at final destination!"+
 					"Should be %v, is instead %v",
-					[]byte("testing"), processAction.DestMsg)
+					[]byte("testing"), processAction.FwdMsg.Msg)
 			}
 
 		} else {
