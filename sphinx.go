@@ -232,17 +232,11 @@ func NewForwardingMessage(route []*btcec.PublicKey, dest LightningAddress, sessi
 		return nil, err
 	}
 
-	// Now for the body of the message. The next-node ID is set to all
-	// zeroes in order to notify the final hop that the message is meant for
-	// them. m = 0^k || dest || msg || padding.
+	// Now for the body of the message.
 	var body [messageSize]byte
-	n := copy(body[:], bytes.Repeat([]byte{0}, securityParameter))
-	// TODO(roasbeef): destination vs identifier (node id) format.
-	n += copy(body[n:], []byte(dest))
-	n += copy(body[n:], message)
-	// TODO(roasbeef): make pad and unpad functions.
+	n := copy(body[:], message)
 	n += copy(body[n:], []byte{0x7f})
-	n += copy(body[n:], bytes.Repeat([]byte{0xff}, messageSize-len(body)))
+	n += copy(body[n:], bytes.Repeat([]byte{0xff}, messageSize-n))
 
 	// Now we construct the onion. Walking backwards from the last hop, we
 	// encrypt the message with the shared secret for each hop in the path.
@@ -446,7 +440,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 			return nil, err
 		}*/
 		destAddr := onionCore[securityParameter : securityParameter*2]
-		msg := onionCore[securityParameter*2:]
+		msg := onionCore[:]
 		return &ProcessMsgAction{
 			Action:   ExitNode,
 			DestAddr: destAddr,

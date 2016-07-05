@@ -58,15 +58,6 @@ func TestSphinxCorrectness(t *testing.T) {
 					"the path, yet it doesn't recognize so", i)
 			}
 
-			// The original destination address and message should
-			// now be fully decrypted.
-			if !bytes.Equal(dest, processAction.DestAddr) {
-				t.Fatalf("Destination address parsed incorrectly at final destination!"+
-					" Should be %v, is instead %v",
-					hex.EncodeToString(dest),
-					hex.EncodeToString(processAction.DestAddr))
-			}
-
 			if !bytes.HasPrefix(processAction.DestMsg, []byte("testing")) {
 				t.Fatalf("Final message parsed incorrectly at final destination!"+
 					"Should be %v, is instead %v",
