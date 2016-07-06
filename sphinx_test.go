@@ -32,9 +32,8 @@ func TestSphinxCorrectness(t *testing.T) {
 	// Generate a forwarding message to route to the final node via the
 	// generated intermdiates nodes above.
 	// Destination should be Hash160, adding padding so parsing still works.
-	dest := append([]byte("roasbeef"), bytes.Repeat([]byte{0}, securityParameter-8)...)
 	sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{'A'}, 32))
-	fwdMsg, err := NewForwardingMessage(route, dest, sessionKey, []byte("testing"))
+	fwdMsg, err := NewForwardingMessage(route, sessionKey, []byte("testing"))
 	if err != nil {
 		t.Fatalf("Unable to create forwarding message: %#v", err)
 	}

@@ -34,7 +34,7 @@ func main() {
 
 		sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{'A'}, 32))
 
-		msg, err := sphinx.NewForwardingMessage(route, bytes.Repeat([]byte{0x00}, 20), sessionKey, []byte("testing"))
+		msg, err := sphinx.NewForwardingMessage(route, sessionKey, []byte("testing"))
 		_, _ = msg, err
 		fmt.Printf("%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
 			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Msg)

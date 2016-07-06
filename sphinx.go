@@ -89,8 +89,7 @@ type MixHeader struct {
 // to a final node indicated by 'identifier' housing a message addressed to
 // 'dest'. This function returns the created mix header along with a derived
 // shared secret for each node in the path.
-func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
-	paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey) (*MixHeader, [][sharedSecretSize]byte, error) {
+func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, message [1024]byte) (*MixHeader, [1024]byte, [][sharedSecretSize]byte, error) {
 	// Each hop performs ECDH with our ephemeral key pair to arrive at a
 	// shared secret. Additionally, each hop randomizes the group element
 	// for the next hop by multiplying it by the blinding factor. This way
@@ -140,6 +139,7 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 	xor(mixHeader, mixHeader, streamBytes[:routingInfoSize])
 	mixHeader = append(mixHeader, filler...)
 
+	onion := lionessEncode(generateKey("pi", hopSharedSecrets[numHops-1]), message)
 	// Calculate a MAC over the encrypted mix header for the last hop
 	// (including the filler bytes), using the same shared secret key as
 	// used for encryption above.
@@ -161,6 +161,7 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 		b.Write(mixHeader[:(2*numMaxHops-2)*securityParameter+extraInfo])
 
 		streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[i]), numStreamBytes)
+		onion = lionessEncode(generateKey("pi", hopSharedSecrets[i]), onion)
 		xor(mixHeader, b.Bytes(), streamBytes[:routingInfoSize])
 		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), mixHeader)
 	}
@@ -173,7 +174,7 @@ func NewMixHeader(dest LightningAddress, identifier [securityParameter]byte,
 		HeaderMAC:    headerMac,
 	}
 
-	return header, hopSharedSecrets, nil
+	return header, onion, hopSharedSecrets, nil
 }
 
 // generateHeaderPadding derives the bytes for padding the mix header to ensure
@@ -220,33 +221,25 @@ type ForwardingMessage struct {
 // mixnet, eventually reaching the final node specified by 'identifier'. The
 // onion encrypted message payload is then to be delivered to the specified 'dest'
 // address.
-func NewForwardingMessage(route []*btcec.PublicKey, dest LightningAddress, sessionKey *btcec.PrivateKey,
+func NewForwardingMessage(route []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
 	message []byte) (*ForwardingMessage, error) {
-	routeLength := len(route)
+
+	// Now for the body of the message.
+	var body [1024]byte
+	n := copy(body[:], message)
+	n += copy(body[n:], []byte{0x7f})
+	n += copy(body[n:], bytes.Repeat([]byte{0xff}, messageSize-n))
 
 	// Compute the mix header, and shared secerts for each hop. We pass in
 	// the null destination and zero identifier in order for the final node
 	// in the route to be able to distinguish the payload as addressed to
 	// itself.
-	mixHeader, secrets, err := NewMixHeader([]byte{nullDest}, zeroNode, route, sessionKey)
+	mixHeader, body, _, err := NewMixHeader(route, sessionKey, body)
 	if err != nil {
 		return nil, err
 	}
 
-	// Now for the body of the message.
-	var body [messageSize]byte
-	n := copy(body[:], message)
-	n += copy(body[n:], []byte{0x7f})
-	n += copy(body[n:], bytes.Repeat([]byte{0xff}, messageSize-n))
-
-	// Now we construct the onion. Walking backwards from the last hop, we
-	// encrypt the message with the shared secret for each hop in the path.
-	onion := lionessEncode(generateKey("pi", secrets[routeLength-1]), body)
-	for i := routeLength - 2; i >= 0; i-- {
-		onion = lionessEncode(generateKey("pi", secrets[i]), onion)
-	}
-
-	return &ForwardingMessage{Header: mixHeader, Msg: onion}, nil
+	return &ForwardingMessage{Header: mixHeader, Msg: body}, nil
 }
 
 // calcMac calculates HMAC-SHA-256 over the message using the passed secret key as
