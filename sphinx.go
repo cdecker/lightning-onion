@@ -143,7 +143,7 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 	// Calculate a MAC over the encrypted mix header for the last hop
 	// (including the filler bytes), using the same shared secret key as
 	// used for encryption above.
-	headerMac := calcMac(generateKey("mu", hopSharedSecrets[numHops-1]), mixHeader)
+	headerMac := calcMac(generateKey("mu", hopSharedSecrets[numHops-1]), append(mixHeader, onion[:]...))
 
 	// Now we compute the routing information for each hop, along with a
 	// MAC of the routing info using the shared key for that hop.
@@ -163,7 +163,7 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 		streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[i]), numStreamBytes)
 		onion = lionessEncode(generateKey("pi", hopSharedSecrets[i]), onion)
 		xor(mixHeader, b.Bytes(), streamBytes[:routingInfoSize])
-		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), mixHeader)
+		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), append(mixHeader, onion[:]...))
 	}
 
 	var r [routingInfoSize]byte
@@ -404,7 +404,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	// Using the derived shared secret, ensure the integrity of the routing
 	// information by checking the attached MAC without leaking timing
 	// information.
-	calculatedMac := calcMac(generateKey("mu", sharedSecret), routeInfo[:])
+	calculatedMac := calcMac(generateKey("mu", sharedSecret), append(routeInfo[:], onionMsg[:]...))
 	if !hmac.Equal(headerMac[:], calculatedMac[:]) {
 		return nil, fmt.Errorf("MAC mismatch, rejecting forwarding message")
 	}
