@@ -24,7 +24,7 @@ const (
 	// How much extra information we want to store in the onion
 	// routing header. The paper used this to store an HMAC of the
 	// payload, but we'll put it somewhere else.
-	extraInfo = securityParameter
+	extraInfo = 0
 
 	// The maximum path length. This should be set to an
 	// estiamate of the upper limit of the diameter of the node graph.
