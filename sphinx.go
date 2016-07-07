@@ -171,18 +171,10 @@ func generateHeaderPadding(numHops int, sharedSecrets [][sharedSecretSize]byte) 
 
 	for i := 1; i < numHops; i++ {
 		totalFillerSize := (2*(numMaxHops-i)+2)*securityParameter + extraInfo
-		padding := bytes.Repeat([]byte{0}, 2*securityParameter)
-
-		var tempBuf bytes.Buffer
-		tempBuf.Write(filler)
-		tempBuf.Write(padding)
-
 		streamBytes := generateCipherStream(generateKey("rho", sharedSecrets[i-1]),
 			numStreamBytes)
-
-		xor(filler, tempBuf.Bytes(), streamBytes[totalFillerSize:])
+		xor(filler, filler, streamBytes[totalFillerSize:])
 	}
-
 	return filler
 }
 
