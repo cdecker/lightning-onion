@@ -26,47 +26,27 @@ const (
 	// payload, but we'll put it somewhere else.
 	extraInfo = securityParameter
 
-	// Mix header over head. If we assume 5 hops (which seems sufficient for
-	// LN, for now atleast), 32 byte group element to be re-randomized each
-	// hop, and 32 byte symmetric key.
-	// Overhead is: p + (2r + 2)s
-	//  * p = pub key size (in bytes, for DH each hop)
-	//  * r = max number of hops
-	//  * s = summetric key size (in bytes)
-	// It's: 32 + (2*5 + 2) * 20 = 273 bytes! But if we use secp256k1 instead of
-	// Curve25519, then we've have an extra byte for the compressed keys.
-	// 837 bytes for 20 hops.
-	mixHeaderOverhead = 273
-
 	// The maximum path length. This should be set to an
 	// estiamate of the upper limit of the diameter of the node graph.
 	numMaxHops = 5
 
-	// Special destination to indicate we're at the end of the path.
-	nullDestination = 0x00
-
-	// (2r + 3)k = (2*5 + 3) * 32 = 260
 	// The number of bytes produced by our CSPRG for the key stream
 	// implementing our stream cipher to encrypt/decrypt the mix header. The
 	// last 2 * securityParameter bytes are only used in order to generate/check
 	// the MAC over the header.
 	numStreamBytes = (2*numMaxHops+2)*securityParameter + extraInfo
 
+	// Size in bytes of the shared secrets.
 	sharedSecretSize = 32
 
-	// node_id + mac + (2*5-1)*20
-	// 20 + 20 + 180 = 220
+	// Fixed size of the the routing info. This consists of a 20
+	// byte address and a 20 byte HMAC for each hop of the route,
+	// the first pair in cleartext and the following pairs
+	// increasingly obfuscated. In case fewer than numMaxHops are
+	// used, then the remainder is padded with null-bytes, also
+	// obfuscated.
 	routingInfoSize = 2*numMaxHops*securityParameter + extraInfo
 )
-
-var defaultBitcoinNet = &chaincfg.TestNet3Params
-
-//type LnAddr btcutil.Address
-// TODO(roasbeef): ok, so we're back to k=20 then. Still using the truncated sha256 MAC.
-type LightningAddress []byte
-
-var zeroNode [securityParameter]byte
-var nullDest byte
 
 // MixHeader is the onion wrapped hop-to-hop routing information neccessary to
 // propagate a message through the mix-net without intermediate nodes having
@@ -84,11 +64,10 @@ type MixHeader struct {
 	HeaderMAC    [securityParameter]byte
 }
 
-// NewMixHeader creates a new mix header which is capable of obliviously
-// routing a message through the mix-net path outline by 'paymentPath'
-// to a final node indicated by 'identifier' housing a message addressed to
-// 'dest'. This function returns the created mix header along with a derived
-// shared secret for each node in the path.
+// NewMixHeader creates a new mix header which is capable of
+// obliviously routing a message through the mix-net path outline by
+// 'paymentPath'.  This function returns the created mix header along
+// with a derived shared secret for each node in the path.
 func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, message [1024]byte) (*MixHeader, [1024]byte, [][sharedSecretSize]byte, error) {
 	// Each hop performs ECDH with our ephemeral key pair to arrive at a
 	// shared secret. Additionally, each hop randomizes the group element
