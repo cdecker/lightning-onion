@@ -39,6 +39,9 @@ const (
 	// Size in bytes of the shared secrets.
 	sharedSecretSize = 32
 
+	// Per-hop payload size
+	hopPayloadSize = 20
+
 	// Fixed size of the the routing info. This consists of a 20
 	// byte address and a 20 byte HMAC for each hop of the route,
 	// the first pair in cleartext and the following pairs
@@ -62,13 +65,17 @@ type MixHeader struct {
 	EphemeralKey *btcec.PublicKey
 	RoutingInfo  [routingInfoSize]byte
 	HeaderMAC    [securityParameter]byte
+	HopPayload   [numMaxHops * hopPayloadSize]byte
 }
 
 // NewMixHeader creates a new mix header which is capable of
 // obliviously routing a message through the mix-net path outline by
 // 'paymentPath'.  This function returns the created mix header along
 // with a derived shared secret for each node in the path.
-func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, message [1024]byte) (*MixHeader, [1024]byte, [][sharedSecretSize]byte, error) {
+func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
+	message [1024]byte, rawHopPayloads [][]byte) (*MixHeader,
+	[1024]byte, [][sharedSecretSize]byte, error) {
+
 	// Each hop performs ECDH with our ephemeral key pair to arrive at a
 	// shared secret. Additionally, each hop randomizes the group element
 	// for the next hop by multiplying it by the blinding factor. This way
@@ -106,10 +113,20 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 	}
 
 	// Generate the padding, called "filler strings" in the paper.
-	filler := generateHeaderPadding(numHops, hopSharedSecrets)
+	filler := generateHeaderPadding("rho", numHops, 2*securityParameter, hopSharedSecrets)
+	hopFiller := generateHeaderPadding("gamma", numHops, hopPayloadSize, hopSharedSecrets)
 
 	// First we generate the routing info + MAC for the very last hop.
 	mixHeader := bytes.Repeat([]byte{0x00}, (2*(numMaxHops-numHops)+2)*securityParameter+extraInfo)
+
+	var hopPayloads [numMaxHops * hopPayloadSize]byte
+
+	hopStreamBytes := generateCipherStream(generateKey("gamma", hopSharedSecrets[numHops-1]), numMaxHops*hopPayloadSize)
+
+	// Manually insert the first hopPayload, otherwise
+	copy(hopPayloads[:], rawHopPayloads[numHops-1])
+	xor(hopPayloads[:], hopPayloads[:], hopStreamBytes)
+	copy(hopPayloads[len(hopPayloads)-len(hopFiller):], hopFiller)
 
 	// Encrypt the header for the final hop with the shared secret the
 	// destination will eventually derive, then pad the message out to full
@@ -122,7 +139,7 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 	// Calculate a MAC over the encrypted mix header for the last hop
 	// (including the filler bytes), using the same shared secret key as
 	// used for encryption above.
-	headerMac := calcMac(generateKey("mu", hopSharedSecrets[numHops-1]), append(mixHeader, onion[:]...))
+	headerMac := calcMac(generateKey("mu", hopSharedSecrets[numHops-1]), append(append(mixHeader, hopPayloads[:]...), onion[:]...))
 
 	// Now we compute the routing information for each hop, along with a
 	// MAC of the routing info using the shared key for that hop.
@@ -138,11 +155,20 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 		b.Write(headerMac[:])
 		// Mix header itself.
 		b.Write(mixHeader[:(2*numMaxHops-2)*securityParameter+extraInfo])
-
 		streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[i]), numStreamBytes)
 		onion = lionessEncode(generateKey("pi", hopSharedSecrets[i]), onion)
 		xor(mixHeader, b.Bytes(), streamBytes[:routingInfoSize])
-		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), append(mixHeader, onion[:]...))
+
+		// Obfuscate the per-hop payload
+		var b2 bytes.Buffer
+		b2.Write(rawHopPayloads[i][:20])
+		b2.Write(bytes.Repeat([]byte{0x00}, hopPayloadSize-len(rawHopPayloads[i])))
+		b2.Write(hopPayloads[:])
+		hopStreamBytes := generateCipherStream(generateKey("gamma", hopSharedSecrets[i]), uint(len(hopPayloads)))
+		xor(hopPayloads[:], b2.Bytes(), hopStreamBytes)
+
+		packet := append(append(mixHeader, hopPayloads[:]...), onion[:]...)
+		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), packet)
 	}
 
 	var r [routingInfoSize]byte
@@ -151,8 +177,8 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 		EphemeralKey: hopEphemeralPubKeys[0],
 		RoutingInfo:  r,
 		HeaderMAC:    headerMac,
+		HopPayload:   hopPayloads,
 	}
-
 	return header, onion, hopSharedSecrets, nil
 }
 
@@ -166,14 +192,14 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey, 
 // decrypt the next routing information eventually leaving only the original
 // "filler" bytes produced by this function at the last hop. Using this
 // methodology, the size of the mix header stays constant at each hop.
-func generateHeaderPadding(numHops int, sharedSecrets [][sharedSecretSize]byte) []byte {
-	filler := make([]byte, 2*(numHops-1)*securityParameter)
+func generateHeaderPadding(key string, numHops int, hopSize int, sharedSecrets [][sharedSecretSize]byte) []byte {
+	filler := make([]byte, (numHops-1)*hopSize)
 
 	for i := 1; i < numHops; i++ {
-		totalFillerSize := (2*(numMaxHops-i)+2)*securityParameter + extraInfo
-		streamBytes := generateCipherStream(generateKey("rho", sharedSecrets[i-1]),
+		totalFillerSize := ((numMaxHops-i)+1)*hopSize + extraInfo
+		streamBytes := generateCipherStream(generateKey(key, sharedSecrets[i-1]),
 			numStreamBytes)
-		xor(filler, filler, streamBytes[totalFillerSize:])
+		xor(filler, filler, streamBytes[totalFillerSize:totalFillerSize+i*hopSize])
 	}
 	return filler
 }
@@ -193,7 +219,7 @@ type ForwardingMessage struct {
 // onion encrypted message payload is then to be delivered to the specified 'dest'
 // address.
 func NewForwardingMessage(route []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
-	message []byte) (*ForwardingMessage, error) {
+	message []byte, hopPayloads [][]byte) (*ForwardingMessage, error) {
 
 	// Now for the body of the message.
 	var body [1024]byte
@@ -205,7 +231,7 @@ func NewForwardingMessage(route []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 	// the null destination and zero identifier in order for the final node
 	// in the route to be able to distinguish the payload as addressed to
 	// itself.
-	mixHeader, body, _, err := NewMixHeader(route, sessionKey, body)
+	mixHeader, body, _, err := NewMixHeader(route, sessionKey, body, hopPayloads)
 	if err != nil {
 		return nil, err
 	}
@@ -375,9 +401,11 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	// Using the derived shared secret, ensure the integrity of the routing
 	// information by checking the attached MAC without leaking timing
 	// information.
-	calculatedMac := calcMac(generateKey("mu", sharedSecret), append(routeInfo[:], onionMsg[:]...))
+
+	message := append(append(routeInfo[:], mixHeader.HopPayload[:]...), onionMsg[:]...)
+	calculatedMac := calcMac(generateKey("mu", sharedSecret), message)
 	if !hmac.Equal(headerMac[:], calculatedMac[:]) {
-		return nil, fmt.Errorf("MAC mismatch, rejecting forwarding message")
+		return nil, fmt.Errorf("MAC mismatch %x != %x, rejecting forwarding message", headerMac, calculatedMac)
 	}
 
 	// The MAC checks out, mark this current shared secret as processed in
@@ -407,6 +435,15 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	var nextMixHeader [routingInfoSize]byte
 	copy(nextMixHeader[:], hopInfo[securityParameter*2:])
 
+	hopPayloadsWithPadding := append(mixHeader.HopPayload[:], bytes.Repeat([]byte{0x00}, hopPayloadSize)...)
+	hopStreamBytes := generateCipherStream(generateKey("gamma", sharedSecret), uint(len(hopPayloadsWithPadding)))
+	xor(hopPayloadsWithPadding, hopPayloadsWithPadding, hopStreamBytes)
+
+	myPayload := hopPayloadsWithPadding[:hopPayloadSize]
+	fmt.Printf("My Payload %x\n", myPayload)
+	var nextHopPayloads [numMaxHops * hopPayloadSize]byte
+	copy(nextHopPayloads[:], hopPayloadsWithPadding[hopPayloadSize:])
+
 	// Strip a single layer of encryption from the onion for the
 	// next hop to also process.
 	nextOnion := lionessDecode(generateKey("pi", sharedSecret), onionMsg)
@@ -416,6 +453,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 			EphemeralKey: nextDHKey,
 			RoutingInfo:  nextMixHeader,
 			HeaderMAC:    nextMac,
+			HopPayload:   nextHopPayloads,
 		},
 		Msg: nextOnion,
 	}

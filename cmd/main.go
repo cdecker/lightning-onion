@@ -34,10 +34,16 @@ func main() {
 
 		sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{'A'}, 32))
 
-		msg, err := sphinx.NewForwardingMessage(route, sessionKey, []byte("testing"))
+		var hopPayloads [][]byte
+		for i := 0; i < len(route); i++ {
+			payload := bytes.Repeat([]byte{'A'}, 20)
+			hopPayloads = append(hopPayloads, payload)
+		}
+
+		msg, err := sphinx.NewForwardingMessage(route, sessionKey, []byte("testing"), hopPayloads)
 		_, _ = msg, err
-		fmt.Printf("%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
-			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Msg)
+		fmt.Printf("%x%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
+			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Header.HopPayload, msg.Msg)
 	} else if args[1] == "decode" {
 		binKey, err := hex.DecodeString(args[2])
 		if len(binKey) != 32 || err != nil {
@@ -59,16 +65,22 @@ func main() {
 				EphemeralKey: ephemeralKey,
 			},
 		}
+
+		n := 33
+
 		copy(fm.Msg[:], binMsg[len(binMsg)-1024:len(binMsg)])
-		copy(fm.Header.HeaderMAC[:], binMsg[33:53])
-		copy(fm.Header.RoutingInfo[:], binMsg[53:len(binMsg)-1024])
+		copy(fm.Header.HeaderMAC[:], binMsg[n:n+20])
+		n += 20
+		copy(fm.Header.RoutingInfo[:], binMsg[n:n+len(fm.Header.RoutingInfo)])
+		n += len(fm.Header.RoutingInfo)
+		copy(fm.Header.HopPayload[:], binMsg[n:n+len(fm.Header.HopPayload)])
 		s := sphinx.NewSphinxNode(privkey, &chaincfg.TestNet3Params)
 		p, err := s.ProcessForwardingMessage(&fm)
 		if err != nil {
 			log.Fatalf("Failed to decode message: %s", err)
 		}
 		msg := p.FwdMsg
-		fmt.Printf("%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
-			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Msg)
+		fmt.Printf("%x%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
+			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Header.HopPayload, msg.Msg)
 	}
 }
