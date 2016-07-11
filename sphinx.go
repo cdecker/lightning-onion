@@ -28,7 +28,7 @@ const (
 
 	// The maximum path length. This should be set to an
 	// estiamate of the upper limit of the diameter of the node graph.
-	numMaxHops = 5
+	numMaxHops = 20
 
 	// The number of bytes produced by our CSPRG for the key stream
 	// implementing our stream cipher to encrypt/decrypt the mix header. The
@@ -73,7 +73,7 @@ type MixHeader struct {
 // 'paymentPath'.  This function returns the created mix header along
 // with a derived shared secret for each node in the path.
 func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
-	message [1024]byte, rawHopPayloads [][]byte) (*MixHeader,
+	onion [1024]byte, rawHopPayloads [][]byte) (*MixHeader,
 	[1024]byte, [][sharedSecretSize]byte, error) {
 
 	// Each hop performs ECDH with our ephemeral key pair to arrive at a
@@ -116,70 +116,67 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
 	filler := generateHeaderPadding("rho", numHops, 2*securityParameter, hopSharedSecrets)
 	hopFiller := generateHeaderPadding("gamma", numHops, hopPayloadSize, hopSharedSecrets)
 
-	// First we generate the routing info + MAC for the very last hop.
-	mixHeader := bytes.Repeat([]byte{0x00}, (2*(numMaxHops-numHops)+2)*securityParameter+extraInfo)
-
+	// Allocate and initialize fields to zero-filled slices
+	var mixHeader [routingInfoSize]byte
 	var hopPayloads [numMaxHops * hopPayloadSize]byte
 
-	hopStreamBytes := generateCipherStream(generateKey("gamma", hopSharedSecrets[numHops-1]), numMaxHops*hopPayloadSize)
-
-	// Manually insert the first hopPayload, otherwise
-	copy(hopPayloads[:], rawHopPayloads[numHops-1])
-	xor(hopPayloads[:], hopPayloads[:], hopStreamBytes)
-	copy(hopPayloads[len(hopPayloads)-len(hopFiller):], hopFiller)
-
-	// Encrypt the header for the final hop with the shared secret the
-	// destination will eventually derive, then pad the message out to full
-	// size with the "random" filler bytes.
-	streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[numHops-1]), numStreamBytes)
-	xor(mixHeader, mixHeader, streamBytes[:routingInfoSize])
-	mixHeader = append(mixHeader, filler...)
-
-	onion := lionessEncode(generateKey("pi", hopSharedSecrets[numHops-1]), message)
-	// Calculate a MAC over the encrypted mix header for the last hop
-	// (including the filler bytes), using the same shared secret key as
-	// used for encryption above.
-	headerMac := calcMac(generateKey("mu", hopSharedSecrets[numHops-1]), append(append(mixHeader, hopPayloads[:]...), onion[:]...))
+	// Same goes for the
+	var next_hmac [20]byte
+	next_address := bytes.Repeat([]byte{0x00}, 20)
 
 	// Now we compute the routing information for each hop, along with a
 	// MAC of the routing info using the shared key for that hop.
-	for i := numHops - 2; i >= 0; i-- {
-		// The next hop from the point of view of the current hop. Node
-		// ID's are currently the hash160 of a node's pubKey serialized
-		// in compressed format.
-		nodeID := btcutil.Hash160(paymentPath[i+1].SerializeCompressed())
+	for i := numHops - 1; i >= 0; i-- {
 
-		var b bytes.Buffer
-		b.Write(nodeID)
-		// MAC for mix header.
-		b.Write(headerMac[:])
-		// Mix header itself.
-		b.Write(mixHeader[:(2*numMaxHops-2)*securityParameter+extraInfo])
-		streamBytes := generateCipherStream(generateKey("rho", hopSharedSecrets[i]), numStreamBytes)
-		onion = lionessEncode(generateKey("pi", hopSharedSecrets[i]), onion)
-		xor(mixHeader, b.Bytes(), streamBytes[:routingInfoSize])
+		rhoKey := generateKey("rho", hopSharedSecrets[i])
+		gammaKey := generateKey("gamma", hopSharedSecrets[i])
+		piKey := generateKey("pi", hopSharedSecrets[i])
+		muKey := generateKey("mu", hopSharedSecrets[i])
 
-		// Obfuscate the per-hop payload
-		var b2 bytes.Buffer
-		b2.Write(rawHopPayloads[i][:20])
-		b2.Write(bytes.Repeat([]byte{0x00}, hopPayloadSize-len(rawHopPayloads[i])))
-		b2.Write(hopPayloads[:])
-		hopStreamBytes := generateCipherStream(generateKey("gamma", hopSharedSecrets[i]), uint(len(hopPayloads)))
-		xor(hopPayloads[:], b2.Bytes(), hopStreamBytes)
+		// Shift and obfuscate routing info
+		streamBytes := generateCipherStream(rhoKey, numStreamBytes)
+		rightShift(mixHeader[:], 2*securityParameter)
+		copy(mixHeader[:], next_address[:])
+		copy(mixHeader[securityParameter:], next_hmac[:])
+		xor(mixHeader[:], mixHeader[:], streamBytes[:routingInfoSize])
 
-		packet := append(append(mixHeader, hopPayloads[:]...), onion[:]...)
-		headerMac = calcMac(generateKey("mu", hopSharedSecrets[i]), packet)
+		// Shift and obfuscate per-hop payload
+		rightShift(hopPayloads[:], hopPayloadSize)
+		copy(hopPayloads[:], rawHopPayloads[i])
+		hopStreamBytes := generateCipherStream(gammaKey, uint(len(hopPayloads)))
+		xor(hopPayloads[:], hopPayloads[:], hopStreamBytes)
+
+		// We need to overwrite these so every node generates a correct padding
+		if i == numHops-1 {
+			copy(mixHeader[len(mixHeader)-len(filler):], filler)
+			copy(hopPayloads[len(hopPayloads)-len(hopFiller):], hopFiller)
+		}
+
+		onion = lionessEncode(piKey, onion)
+
+		packet := append(append(mixHeader[:], hopPayloads[:]...), onion[:]...)
+		next_hmac = calcMac(muKey, packet)
+		next_address = btcutil.Hash160(paymentPath[i].SerializeCompressed())
 	}
 
-	var r [routingInfoSize]byte
-	copy(r[:], mixHeader)
 	header := &MixHeader{
 		EphemeralKey: hopEphemeralPubKeys[0],
-		RoutingInfo:  r,
-		HeaderMAC:    headerMac,
+		RoutingInfo:  mixHeader,
+		HeaderMAC:    next_hmac,
 		HopPayload:   hopPayloads,
 	}
 	return header, onion, hopSharedSecrets, nil
+}
+
+// Shift the byte-slice by the given number of bytes to the right and
+// 0-fill the resulting gap.
+func rightShift(slice []byte, num int) {
+	for i := len(slice) - num - 1; i >= 0; i-- {
+		slice[num+i] = slice[i]
+	}
+	for i := 0; i < num; i++ {
+		slice[i] = 0
+	}
 }
 
 // generateHeaderPadding derives the bytes for padding the mix header to ensure
