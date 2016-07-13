@@ -50,6 +50,8 @@ const (
 	// used, then the remainder is padded with null-bytes, also
 	// obfuscated.
 	routingInfoSize = 2*numMaxHops*securityParameter + extraInfo
+
+	keyLen = 32
 )
 
 // MixHeader is the onion wrapped hop-to-hop routing information neccessary to
@@ -153,7 +155,7 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
 			copy(hopPayloads[len(hopPayloads)-len(hopFiller):], hopFiller)
 		}
 
-		cipher, err := chacha20.New(append(piKey[:], bytes.Repeat([]byte{0x00}, 12)...), bytes.Repeat([]byte{0x00}, 8))
+		cipher, err := chacha20.New(piKey[:], bytes.Repeat([]byte{0x00}, 8))
 		if err != nil {
 			return nil, onion, nil, err
 		}
@@ -243,7 +245,7 @@ func NewForwardingMessage(route []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 
 // calcMac calculates HMAC-SHA-256 over the message using the passed secret key as
 // input to the HMAC.
-func calcMac(key [securityParameter]byte, msg []byte) [securityParameter]byte {
+func calcMac(key [keyLen]byte, msg []byte) [securityParameter]byte {
 	hmac := hmac.New(sha256.New, key[:])
 	hmac.Write(msg)
 	h := hmac.Sum(nil)
@@ -269,20 +271,20 @@ func xor(dst, a, b []byte) int {
 // generateKey...
 // used to key rand padding generation, mac, and lionness
 // TODO(roasbeef): comment...
-func generateKey(keyType string, sharedKey [sharedSecretSize]byte) [securityParameter]byte {
+func generateKey(keyType string, sharedKey [sharedSecretSize]byte) [keyLen]byte {
 	mac := hmac.New(sha256.New, []byte(keyType))
 	mac.Write(sharedKey[:])
 	h := mac.Sum(nil)
 
-	var key [securityParameter]byte
-	copy(key[:], h[:securityParameter])
+	var key [keyLen]byte
+	copy(key[:], h[:keyLen])
 
 	return key
 }
 
 // generateHeaderPadding...
 // TODO(roasbeef): comments...
-func generateCipherStream(key [securityParameter]byte, numBytes uint) []byte {
+func generateCipherStream(key [keyLen]byte, numBytes uint) []byte {
 	// Key must be 16, 24, or 32 bytes.
 	block, _ := aes.NewCipher(key[:16])
 
@@ -457,9 +459,8 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 
 	// Strip a single layer of encryption from the onion for the
 	// next hop to also process.
-	// FIXME actually use 32 byte keys
 	key := generateKey("pi", sharedSecret)
-	cipher, err := chacha20.New(append(key[:], bytes.Repeat([]byte{0x00}, 12)...), bytes.Repeat([]byte{0x00}, 8))
+	cipher, err := chacha20.New(key[:], bytes.Repeat([]byte{0x00}, 8))
 	if err != nil {
 		return nil, err
 	}
