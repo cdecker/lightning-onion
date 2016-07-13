@@ -2,8 +2,6 @@ package sphinx
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
@@ -285,21 +283,15 @@ func generateKey(keyType string, sharedKey [sharedSecretSize]byte) [keyLen]byte 
 // generateHeaderPadding...
 // TODO(roasbeef): comments...
 func generateCipherStream(key [keyLen]byte, numBytes uint) []byte {
-	// Key must be 16, 24, or 32 bytes.
-	block, _ := aes.NewCipher(key[:16])
+	var nonce [8]byte
+	cipher, err := chacha20.New(key[:], nonce[:])
+	if err != nil {
+		panic(err)
+	}
+	output := make([]byte, numBytes)
+	cipher.XORKeyStream(output, output)
 
-	// We use AES in CTR mode to generate a psuedo randmom stream of bytes
-	// by encrypting a plaintext of all zeroes.
-	cipherStream := make([]byte, numBytes)
-	plainText := bytes.Repeat([]byte{0}, int(numBytes))
-
-	// Our IV is just zero....
-	iv := bytes.Repeat([]byte{0}, aes.BlockSize)
-
-	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(cipherStream, plainText)
-
-	return cipherStream
+	return output
 }
 
 // ComputeBlindingFactor for the next hop given the ephemeral pubKey and
