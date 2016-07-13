@@ -11,6 +11,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
+	"github.com/codahale/chacha20"
 )
 
 const (
@@ -152,7 +153,11 @@ func NewMixHeader(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
 			copy(hopPayloads[len(hopPayloads)-len(hopFiller):], hopFiller)
 		}
 
-		onion = lionessEncode(piKey, onion)
+		cipher, err := chacha20.New(append(piKey[:], bytes.Repeat([]byte{0x00}, 12)...), bytes.Repeat([]byte{0x00}, 8))
+		if err != nil {
+			return nil, onion, nil, err
+		}
+		cipher.XORKeyStream(onion[:], onion[:])
 
 		packet := append(append(mixHeader[:], hopPayloads[:]...), onion[:]...)
 		next_hmac = calcMac(muKey, packet)
@@ -441,10 +446,6 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	var nextHopPayloads [numMaxHops * hopPayloadSize]byte
 	copy(nextHopPayloads[:], hopPayloadsWithPadding[hopPayloadSize:])
 
-	// Strip a single layer of encryption from the onion for the
-	// next hop to also process.
-	nextOnion := lionessDecode(generateKey("pi", sharedSecret), onionMsg)
-
 	nextFwdMsg := &ForwardingMessage{
 		Header: &MixHeader{
 			EphemeralKey: nextDHKey,
@@ -452,8 +453,17 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 			HeaderMAC:    nextMac,
 			HopPayload:   nextHopPayloads,
 		},
-		Msg: nextOnion,
 	}
+
+	// Strip a single layer of encryption from the onion for the
+	// next hop to also process.
+	// FIXME actually use 32 byte keys
+	key := generateKey("pi", sharedSecret)
+	cipher, err := chacha20.New(append(key[:], bytes.Repeat([]byte{0x00}, 12)...), bytes.Repeat([]byte{0x00}, 8))
+	if err != nil {
+		return nil, err
+	}
+	cipher.XORKeyStream(nextFwdMsg.Msg[:], onionMsg[:])
 
 	var action ProcessCode = MoreHops
 
