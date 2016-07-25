@@ -75,7 +75,7 @@ func main() {
 		n += len(fm.Header.RoutingInfo)
 		copy(fm.Header.HopPayload[:], binMsg[n:n+len(fm.Header.HopPayload)])
 		s := sphinx.NewSphinxNode(privkey, &chaincfg.TestNet3Params)
-		p, err := s.ProcessForwardingMessage(&fm)
+		p, _, err := s.ProcessForwardingMessage(&fm)
 		if err != nil {
 			log.Fatalf("Failed to decode message: %s", err)
 		}

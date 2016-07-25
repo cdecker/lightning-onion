@@ -371,17 +371,18 @@ func NewSphinxNode(nodeKey *btcec.PrivateKey, net *chaincfg.Params) *SphinxNode 
 
 // ProcessMixHeader...
 // TODO(roasbeef): proto msg enum?
-func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*ProcessMsgAction, error) {
+func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*ProcessMsgAction, [hopPayloadSize]byte, error) {
 	mixHeader := fwdMsg.Header
 	onionMsg := fwdMsg.Msg
 
 	dhKey := mixHeader.EphemeralKey
 	routeInfo := mixHeader.RoutingInfo
 	headerMac := mixHeader.HeaderMAC
+	var hopPayload [hopPayloadSize]byte
 
 	// Ensure that the public key is on our curve.
 	if !s.lnKey.Curve.IsOnCurve(dhKey.X, dhKey.Y) {
-		return nil, fmt.Errorf("pubkey isn't on secp256k1 curve")
+		return nil, hopPayload, fmt.Errorf("pubkey isn't on secp256k1 curve")
 	}
 
 	// Compute our shared secret.
@@ -391,7 +392,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	// shared secret before, cease processing and just drop this forwarding
 	// message.
 	if _, ok := s.seenSecrets[sharedSecret]; ok {
-		return nil, fmt.Errorf("shared secret previously seen")
+		return nil, hopPayload, fmt.Errorf("shared secret previously seen")
 	}
 
 	// Using the derived shared secret, ensure the integrity of the routing
@@ -401,7 +402,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	message := append(append(routeInfo[:], mixHeader.HopPayload[:]...), onionMsg[:]...)
 	calculatedMac := calcMac(generateKey("mu", sharedSecret), message)
 	if !hmac.Equal(headerMac[:], calculatedMac[:]) {
-		return nil, fmt.Errorf("MAC mismatch %x != %x, rejecting forwarding message", headerMac, calculatedMac)
+		return nil, hopPayload, fmt.Errorf("MAC mismatch %x != %x, rejecting forwarding message", headerMac, calculatedMac)
 	}
 
 	// The MAC checks out, mark this current shared secret as processed in
@@ -435,8 +436,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	hopStreamBytes := generateCipherStream(generateKey("gamma", sharedSecret), uint(len(hopPayloadsWithPadding)))
 	xor(hopPayloadsWithPadding, hopPayloadsWithPadding, hopStreamBytes)
 
-	myPayload := hopPayloadsWithPadding[:hopPayloadSize]
-	fmt.Printf("My Payload %x\n", myPayload)
+	copy(hopPayload[:], hopPayloadsWithPadding[:hopPayloadSize])
 	var nextHopPayloads [numMaxHops * hopPayloadSize]byte
 	copy(nextHopPayloads[:], hopPayloadsWithPadding[hopPayloadSize:])
 
@@ -454,7 +454,7 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 	key := generateKey("pi", sharedSecret)
 	cipher, err := chacha20.New(key[:], bytes.Repeat([]byte{0x00}, 8))
 	if err != nil {
-		return nil, err
+		return nil, hopPayload, err
 	}
 	cipher.XORKeyStream(nextFwdMsg.Msg[:], onionMsg[:])
 
@@ -468,5 +468,5 @@ func (s *SphinxNode) ProcessForwardingMessage(fwdMsg *ForwardingMessage) (*Proce
 		Action:  action,
 		NextHop: nextHop,
 		FwdMsg:  nextFwdMsg,
-	}, nil
+	}, hopPayload, nil
 }
