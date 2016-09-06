@@ -49,6 +49,8 @@ const (
 	// obfuscated.
 	routingInfoSize = 2*numMaxHops*securityParameter + extraInfo
 
+	totalPacketSize = 33 + routingInfoSize + numMaxHops*hopPayloadSize + messageSize + securityParameter
+
 	keyLen = 32
 )
 
@@ -367,6 +369,42 @@ func NewSphinxNode(nodeKey *btcec.PrivateKey, net *chaincfg.Params) *SphinxNode 
 		// * https://moderncrypto.org/mail-archive/messaging/2015/001911.html
 		seenSecrets: make(map[[sharedSecretSize]byte]struct{}),
 	}
+}
+
+func ParseForwardingMessage(msg []byte) (*ForwardingMessage, error) {
+	if len(msg) != totalPacketSize {
+		return nil, fmt.Errorf("Invalid packet size, expected %d, received %d",
+			totalPacketSize, len(msg))
+	}
+	buf := bytes.NewBuffer(msg)
+
+	var rawPubkey [33]byte
+	var result ForwardingMessage
+	buf.Read(rawPubkey[:])
+	ephemeralKey, err := btcec.ParsePubKey(rawPubkey[:], btcec.S256())
+	if err != nil {
+		return nil, err
+	}
+
+	result.Header = &MixHeader{
+		EphemeralKey: ephemeralKey,
+	}
+
+	buf.Read(result.Header.HeaderMAC[:])
+	buf.Read(result.Header.RoutingInfo[:])
+	buf.Read(result.Header.HopPayload[:])
+	buf.Read(result.Msg[:])
+	return &result, nil
+}
+
+func SerializeForwardingMessage(m *ForwardingMessage) ([]byte, error) {
+	buf := bytes.Buffer{}
+	buf.Write(m.Header.EphemeralKey.SerializeCompressed())
+	buf.Write(m.Header.HeaderMAC[:])
+	buf.Write(m.Header.RoutingInfo[:])
+	buf.Write(m.Header.HopPayload[:])
+	buf.Write(m.Msg[:])
+	return buf.Bytes(), nil
 }
 
 // ProcessMixHeader...

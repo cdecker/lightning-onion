@@ -41,46 +41,44 @@ func main() {
 		}
 
 		msg, err := sphinx.NewForwardingMessage(route, sessionKey, []byte("testing"), hopPayloads)
-		_, _ = msg, err
-		fmt.Printf("%x%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
-			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Header.HopPayload, msg.Msg)
+		if err != nil {
+			log.Fatalf("Error creating message: %v", err)
+		}
+
+		binMsg, err := sphinx.SerializeForwardingMessage(msg)
+		if err != nil {
+			log.Fatalf("Error serializing message: %v", err)
+		}
+
+		fmt.Printf("%x\n", binMsg)
 	} else if args[1] == "decode" {
 		binKey, err := hex.DecodeString(args[2])
 		if len(binKey) != 32 || err != nil {
 			log.Fatalf("Argument not a valid hex private key")
 		}
+
 		bytes, _ := ioutil.ReadAll(os.Stdin)
 		binMsg, err := hex.DecodeString(strings.TrimSpace(string(bytes)))
 		if err != nil {
 			log.Fatalf("Error decoding message: %s", err)
 		}
 
-		privkey, pubkey := btcec.PrivKeyFromBytes(btcec.S256(), binKey)
-		fmt.Fprintf(os.Stderr, "Node pubkey %x\n", pubkey.SerializeCompressed())
-
-		ephemeralKey, _ := btcec.ParsePubKey(binMsg[:33], btcec.S256())
-
-		fm := sphinx.ForwardingMessage{
-			Header: &sphinx.MixHeader{
-				EphemeralKey: ephemeralKey,
-			},
-		}
-
-		n := 33
-
-		copy(fm.Msg[:], binMsg[len(binMsg)-1024:len(binMsg)])
-		copy(fm.Header.HeaderMAC[:], binMsg[n:n+20])
-		n += 20
-		copy(fm.Header.RoutingInfo[:], binMsg[n:n+len(fm.Header.RoutingInfo)])
-		n += len(fm.Header.RoutingInfo)
-		copy(fm.Header.HopPayload[:], binMsg[n:n+len(fm.Header.HopPayload)])
+		privkey, _ := btcec.PrivKeyFromBytes(btcec.S256(), binKey)
 		s := sphinx.NewSphinxNode(privkey, &chaincfg.TestNet3Params)
-		p, _, err := s.ProcessForwardingMessage(&fm)
+
+		fm, err := sphinx.ParseForwardingMessage(binMsg)
+		if err != nil {
+			log.Fatalf("Error parsing message: %v", err)
+		}
+		p, _, err := s.ProcessForwardingMessage(fm)
 		if err != nil {
 			log.Fatalf("Failed to decode message: %s", err)
 		}
-		msg := p.FwdMsg
-		fmt.Printf("%x%x%x%x%x\n", msg.Header.EphemeralKey.SerializeCompressed(),
-			msg.Header.HeaderMAC, msg.Header.RoutingInfo, msg.Header.HopPayload, msg.Msg)
+
+		msg, err := sphinx.SerializeForwardingMessage(p.FwdMsg)
+		if err != nil {
+			log.Fatalf("Error serializing message: %v", err)
+		}
+		fmt.Printf("%x\n", msg)
 	}
 }
