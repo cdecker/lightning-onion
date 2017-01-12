@@ -213,8 +213,17 @@ func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 
 	}
 
+	for i := range hopEphemeralPubKeys {
+		fmt.Printf("\thop_shared_secret[%d] = 0x%x\n", i, hopSharedSecrets[i])
+		fmt.Printf("\thop_blinding_factor[%d] = 0x%x\n", i, hopBlindingFactors[i])
+		fmt.Printf("\thop_ephemeral_pubkey[%d] = 0x%x\n", i, hopEphemeralPubKeys[i].SerializeCompressed())
+	}
+	fmt.Println("")
+
 	// Generate the padding, called "filler strings" in the paper.
 	filler := generateHeaderPadding("rho", numHops, hopDataSize, hopSharedSecrets)
+
+	fmt.Printf("\tfiller = 0x%x\n", filler)
 
 	// Allocate and initialize fields to zero-filled slices
 	var mixHeader [routingInfoSize]byte
@@ -232,6 +241,9 @@ func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 		rhoKey := generateKey("rho", hopSharedSecrets[i])
 		muKey := generateKey("mu", hopSharedSecrets[i])
 
+		fmt.Printf("rhokey[%d] = 0x%x\n", i, rhoKey)
+		fmt.Printf("mukey[%d] = 0x%x\n", i, muKey)
+		fmt.Printf("")
 		hopsData[i].HMAC = nextHmac
 
 		// Shift and obfuscate routing info
@@ -241,7 +253,9 @@ func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 		buf := &bytes.Buffer{}
 		hopsData[i].Encode(buf)
 		copy(mixHeader[:], buf.Bytes())
+		fmt.Printf("routing_info[%d] (unencrypted) = 0x%x\n", i, mixHeader[:])
 		xor(mixHeader[:], mixHeader[:], streamBytes[:routingInfoSize])
+		fmt.Printf("routing_info[%d] (encrypted) = 0x%x\n", i, mixHeader[:])
 
 		// We need to overwrite these so every node generates a correct padding
 		if i == numHops-1 {
@@ -254,7 +268,10 @@ func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 		// allow higher level applications to prevent replay
 		// attacks.
 		packet := append(mixHeader[:], assocData...)
+		fmt.Printf("hmac_data[%d] = 0x%x\n", i, packet)
 		nextHmac = calcMac(muKey, packet)
+		fmt.Printf("hmac[%d] = 0x%x\n", i, nextHmac)
+		fmt.Println("")
 	}
 
 	packet := &OnionPacket{

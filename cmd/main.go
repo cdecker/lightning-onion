@@ -35,11 +35,13 @@ func main() {
 			privkey, pubkey := btcec.PrivKeyFromBytes(btcec.S256(), binKey)
 			route = append(route, pubkey)
 			privKeys = append(privKeys, privkey)
-			fmt.Fprintf(os.Stderr, "Node %d pubkey %x\n", i, pubkey.SerializeCompressed())
+			fmt.Printf("pubkey[%d] 0x%x\n", i, pubkey.SerializeCompressed())
 		}
+		fmt.Printf("nhops = %d/%d\n", len(route), sphinx.NumMaxHops)
 
 		sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{'A'}, 32))
 
+		fmt.Printf("sessionkey = 0x%x\n", bytes.Repeat([]byte{'A'}, 32))
 		var hopsData []sphinx.HopData
 		for i := 0; i < len(route); i++ {
 			hopsData = append(hopsData, sphinx.HopData{
@@ -48,9 +50,15 @@ func main() {
 				OutgoingCltv:  uint32(i),
 			})
 			copy(hopsData[i].NextAddress[:], bytes.Repeat([]byte{byte(i)}, 8))
+			buf := &bytes.Buffer{}
+			hopsData[i].Encode(buf)
+			fmt.Printf("hop_data[%d] = 0x%x\n", i, buf.Bytes()[:33])
+
 		}
 
+		fmt.Printf("associated data = 0x%x\n", assocData)
 		msg, err := sphinx.NewOnionPacket(route, sessionKey, hopsData, assocData)
+
 		if err != nil {
 			log.Fatalf("Error creating message: %v", err)
 		}
@@ -61,6 +69,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error serializing message: %v", err)
 		}
+
+		fmt.Printf("onionpacket = 0x%x\n", w.Bytes())
+		fmt.Println("---")
 
 		fmt.Printf("%x\n", w.Bytes())
 	} else if args[1] == "decode" {
