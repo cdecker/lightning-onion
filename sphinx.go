@@ -375,9 +375,9 @@ func generateHeaderPadding(key string, path *PaymentPath, sharedSecrets []Hash25
 
 	for i := 0; i < numHops-1; i++ {
 		// Sum up how many frames were used by prior hops
-		fillerSize := routingInfoSize
+		fillerStart := routingInfoSize
 		for _, p := range path[:i] {
-			fillerSize = fillerSize - (p.HopPayload.CountFrames() * frameSize)
+			fillerStart = fillerStart - (p.HopPayload.CountFrames() * frameSize)
 		}
 
 		// The filler is the part dangling off of the end of
@@ -388,7 +388,7 @@ func generateHeaderPadding(key string, path *PaymentPath, sharedSecrets []Hash25
 		streamKey := generateKey(key, &sharedSecrets[i])
 		streamBytes := generateCipherStream(streamKey, numStreamBytes)
 
-		xor(filler, filler, streamBytes[fillerSize:fillerEnd])
+		xor(filler, filler, streamBytes[fillerStart:fillerEnd])
 	}
 	return filler
 }
